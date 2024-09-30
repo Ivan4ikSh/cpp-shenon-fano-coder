@@ -11,9 +11,9 @@
 using namespace std;
 using namespace std::chrono;
 
-class FanoCodec {
+class FanoCoder {
 public:
-	FanoCodec(const string& file_name) : original_text_(ReadFile(file_name)) {}
+	FanoCoder(const string& text) : text_(text) {}
 
 	string Encode() {
 		vector<pair<char, double>> probs = InitProps();
@@ -23,48 +23,26 @@ public:
 			return rhs.second != lhs.second ? rhs.second > lhs.second : rhs.first < lhs.first;
 			});
 
-		FanoRec(probs, codes_, "");
+		Fano(probs, codes_, "");
 		string coded_text;
-		for (const auto& letter : original_text_) {
+		for (const auto& letter : text_) {
 			coded_text += codes_[letter];
 		}
 
-		coded_text_ = coded_text;
 		return coded_text;
 	}
 
-	string Decode() {
-		unordered_map<string, char> reverse_codes;
-		for (const auto& [symbol, code] : codes_) {
-			reverse_codes[code] = symbol;
-		}
-
-		string decoded_text;
-		string current_code;
-		for (const char& bit : coded_text_) {
-			current_code += bit;
-			if (reverse_codes.find(current_code) != reverse_codes.end()) {
-				decoded_text += reverse_codes[current_code];
-				current_code.clear();
-			}
-		}
-
-		return decoded_text;
+	string GetText() {
+		return text_;
 	}
 
-	void PrintInfo(ostream& out) {
-		out << "Избыточность оригинального текста (%): " << TextRedondance(codes_.size()) * 100 << "\n";
-		out << "Избыточность закодированного текста (%): "  << TextRedondance(coded_text_.size()/ static_cast<double>(original_text_.size())) *100 << "\n";
-	}
-
-	string GetOriginalText() {
-		return original_text_;
+	unordered_map<char, string> GetCodes() {
+		return codes_;
 	}
 private:
-	string original_text_;
-	string coded_text_;
+	string text_;
 	unordered_map<char, string> codes_;
-	double hentropy_;
+	double hentropy_ = 0.0;
 
 	double Hentropy(const vector<pair<char, double>>& probs) {
 		double h = 0;
@@ -75,37 +53,14 @@ private:
 		return h;
 	}
 
-	double TextRedondance(const double& p_byte) {
-		return 1 - (hentropy_ / p_byte);
-	}
-
-	string ReadFile(const string& file_name) {
-		ifstream file(file_name);
-		string input_text;
-		while (!file.eof()) {
-			string s;
-			file >> s;
-			input_text += s + ' ';
-		}
-		file.close();
-		return input_text.substr(0, input_text.size() - 1);
-	}
-
-	unordered_map<char, int> InitFreqMap(const string& text) {
-		unordered_map<char, int> freq_map;
-		for (const auto& letter : text)
-			++freq_map[letter];
-		return freq_map;
-	}
-
-	size_t FindSplitIndex(const vector<pair<char, double>>& probs) {
+	int FindSplitIndex(const vector<pair<char, double>>& probs) {
 		double total_sum = accumulate(probs.begin(), probs.end(), 0.0, [](double sum, const pair<char, double>& p) {
 			return sum + p.second;
 			});
 
 		double left_sum = 0;
 		double min_diff = total_sum;
-		size_t split_index = 0;
+		int split_index = 0;
 
 		for (size_t i = 0; i < probs.size(); ++i) {
 			left_sum += probs[i].second;
@@ -121,7 +76,7 @@ private:
 		return split_index;
 	}
 
-	void FanoRec(vector<pair<char, double>>& probs, unordered_map<char, string>& codes, string prefix) {
+	void Fano(vector<pair<char, double>>& probs, unordered_map<char, string>& codes, string prefix) {
 		if (probs.size() == 1) {
 			codes[probs[0].first] = prefix;
 			return;
@@ -137,16 +92,23 @@ private:
 		vector<pair<char, double>> left(probs.begin(), probs.begin() + split_index);
 		vector<pair<char, double>> right(probs.begin() + split_index, probs.end());
 
-		FanoRec(left, codes, prefix + "1");
-		FanoRec(right, codes, prefix + "0");
+		Fano(left, codes, prefix + "1");
+		Fano(right, codes, prefix + "0");
+	}
+
+	unordered_map<char, int> InitFreqMap() {
+		unordered_map<char, int> freq_map;
+		for (const auto& letter : text_)
+			++freq_map[letter];
+		return freq_map;
 	}
 
 	vector<pair<char, double>> InitProps() {
-		unordered_map<char, int> freq_map = InitFreqMap(original_text_);
+		unordered_map<char, int> freq_map = InitFreqMap();
 		vector<pair<char, double>> probs;
 
 		for (const auto& [letter, count] : freq_map) {
-			double prob = count / static_cast<double>(original_text_.size());
+			double prob = count / static_cast<double>(text_.size());
 			probs.push_back({ letter, prob });
 		}
 
@@ -154,27 +116,66 @@ private:
 	}
 };
 
-int main() {
-	setlocale(LC_ALL, "rus");
+class FanoDecoder {
+public:
+	FanoDecoder(const string& text, unordered_map<char, string> codes) : text_(text), codes_(codes) {}
+	string Decode() {
+		unordered_map<string, char> reverse_codes;
+		for (const auto& [symbol, code] : codes_) {
+			reverse_codes[code] = symbol;
+		}
 
-	FanoCodec codec("input.txt");
-	fstream out_file("output.txt");
+		string decoded_text;
+		string current_code;
+		for (const char& bit : text_) {
+			current_code += bit;
+			if (reverse_codes.find(current_code) != reverse_codes.end()) {
+				decoded_text += reverse_codes[current_code];
+				current_code.clear();
+			}
+		}
 
-	auto c_start = high_resolution_clock::now();
-	string encoded_text = codec.Encode();
-	auto c_stop = high_resolution_clock::now();
+		return decoded_text;
+	}
+private:
+	string text_;
+	unordered_map<char, string> codes_;
+};
 
-	auto c_duration = duration_cast<milliseconds>(c_stop - c_start);
-	out_file << "Закодированный текст: " << encoded_text << endl;
-	out_file << "Время кодирования: " << c_duration.count() << " милисекунд" << endl;
-
-	out_file << "Декодированный текст: " << codec.Decode() << endl;
-	out_file << endl;
-	codec.PrintInfo(out_file);
-	out_file.close();
-	return 0;
+string ReadFile(const string& file_name) {
+	ifstream file(file_name);
+	string input_text;
+	while (!file.eof()) {
+		string s;
+		file >> s;
+		input_text += s + ' ';
+	}
+	file.close();
+	return input_text.substr(0, input_text.size() - 1);
 }
 
-//ИНН 637322757237
-//Hello World!
-//Lorem ipsum dolor sit amet, consetetur sadipscing elitr
+void TEST(const string& coder_file_number) {
+	FanoCoder coder(ReadFile("text-to-code/text" + coder_file_number + ".txt"));
+	auto c_start = high_resolution_clock::now();
+	string encoded_text = coder.Encode();
+	auto c_stop = high_resolution_clock::now();
+	auto c_duration = duration_cast<milliseconds>(c_stop - c_start);
+
+	ofstream f_out("text-to-decode/text" + coder_file_number + ".txt");
+	f_out << encoded_text;
+	f_out.close();
+	cout << "Время кодирования " + coder_file_number + ": " << c_duration.count() << " милисекунд" << endl;
+
+	unordered_map<char, string> code_map = coder.GetCodes();
+
+	FanoDecoder decoder(ReadFile("text-to-decode/text" + coder_file_number + ".txt"), code_map);
+	cout << decoder.Decode() << endl;
+}
+
+int main() {
+	setlocale(LC_ALL, "rus");
+	TEST("1");
+	TEST("2");
+	//TEST_CODER("3");
+	return 0;
+}

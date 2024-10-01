@@ -11,78 +11,87 @@
 using namespace std;
 using namespace std::chrono;
 
+string ReadFile(const string& file_name) {
+	ifstream file(file_name);
+	string input_text;
+	while (!file.eof()) {
+		string s;
+		file >> s;
+		input_text += s + ' ';
+	}
+	file.close();
+
+	return input_text.substr(0, input_text.size() - 1);
+}
+
 class FanoCoder {
 public:
-	FanoCoder(const string& text) : text_(text) {}
-
-	void Encode(const string& output_file_name, const string& code_map_file_name) {
+	FanoCoder(const string& file_name) : text_(ReadFile(file_name)) {
 		vector<pair<char, double>> probs = InitProps();
-
 		sort(probs.begin(), probs.end(), [](const pair<char, double>& rhs, const pair<char, double>& lhs) {
 			return rhs.second != lhs.second ? rhs.second > lhs.second : rhs.first < lhs.first;
 			});
 
 		Fano(probs, codes_, "");
-
-		InitCodeMapFile(code_map_file_name);
-		InitCodedTextFile(output_file_name);		
 	}
 
-	string GetText() {
+	void Encode(const string& file_name) {
+		WriteEncodedWithCodeMap(file_name);
+	}
+
+	string GetText() const {
 		return text_;
 	}
-	string GetEncodedText() {
-		return coded_text_;
+
+	unordered_map<char, string> GetCodes() const {
+		return codes_;
 	}
 
-	unordered_map<char, string> GetCodes() {
-		return codes_;
+	string GetEncodedText() const {
+		return coded_text_;
 	}
 
 	double CalculateHentropy() {
 		vector<pair<char, double>> probs = InitProps();
 		return Hentropy(probs);
 	}
+
 private:
 	string text_;
 	string coded_text_;
 	unordered_map<char, string> codes_;
 
-	void InitCodedTextFile(const string& output_file_name) {
-		uint8_t buffer = 0;
-		int bit_count = 0;
-		ofstream file_out(output_file_name);
-		for (const auto& bit : coded_text_) {
-			if (bit == '1') {
-				buffer |= (1 << (7 - bit_count));
-			}
-			++bit_count;
+	vector<pair<char, double>> InitProps() {
+		unordered_map<char, int> freq_map;
+		for (const auto& letter : text_)
+			++freq_map[letter];
 
-			if (bit_count == 8) {
-				file_out.put(buffer);
-				buffer = 0;
-				bit_count = 0;
-			}
+		vector<pair<char, double>> probs;
+		for (const auto& [letter, count] : freq_map) {
+			double prob = count / static_cast<double>(text_.size());
+			probs.push_back({ letter, prob });
 		}
-		file_out.close();
+
+		return probs;
 	}
 
-	void InitCodeMapFile(const string& code_map_file_name) {
-		string coded_text;
-		ofstream file_codes_out(code_map_file_name);
-		for (const auto& [letter, code] : codes_) {
-			file_codes_out << "'" << letter << "' " << code << endl;
+	void Fano(vector<pair<char, double>>& probs, unordered_map<char, string>& codes, string prefix) {
+		if (probs.size() == 1) {
+			codes[probs[0].first] = prefix;
+			return;
 		}
-		file_codes_out.close();
-	}
+		if (probs.size() == 2) {
+			codes[probs[0].first] = prefix + "1";
+			codes[probs[1].first] = prefix + "0";
+			return;
+		}
 
-	double Hentropy(const vector<pair<char, double>>& probs) {
-		double h = 0;
-		for (const auto& p : probs) {
-			h += p.second * log2(p.second);
-		}
-		h *= -1;
-		return h;
+		size_t split_index = FindSplitIndex(probs);
+		vector<pair<char, double>> left(probs.begin(), probs.begin() + split_index);
+		vector<pair<char, double>> right(probs.begin() + split_index, probs.end());
+
+		Fano(left, codes, prefix + "1");
+		Fano(right, codes, prefix + "0");
 	}
 
 	int FindSplitIndex(const vector<pair<char, double>>& probs) {
@@ -108,83 +117,166 @@ private:
 		return split_index;
 	}
 
-	void Fano(vector<pair<char, double>>& probs, unordered_map<char, string>& codes, string prefix) {
-		if (probs.size() == 1) {
-			codes[probs[0].first] = prefix;
-			return;
+	double Hentropy(const vector<pair<char, double>>& probs) {
+		double h = 0;
+		for (const auto& p : probs) {
+			h += p.second * log2(p.second);
 		}
-		if (probs.size() == 2) {
-			codes[probs[0].first] = prefix + "1";
-			codes[probs[1].first] = prefix + "0";
-			return;
-		}
-
-		size_t split_index = FindSplitIndex(probs);
-
-		vector<pair<char, double>> left(probs.begin(), probs.begin() + split_index);
-		vector<pair<char, double>> right(probs.begin() + split_index, probs.end());
-
-		Fano(left, codes, prefix + "1");
-		Fano(right, codes, prefix + "0");
+		h *= -1;
+		return h;
 	}
 
-	unordered_map<char, int> InitFreqMap() {
-		unordered_map<char, int> freq_map;
-		for (const auto& letter : text_)
-			++freq_map[letter];
-		return freq_map;
-	}
+	void WriteEncodedWithCodeMap(const string& file_name) {
+		ofstream file_out(file_name, ios::binary);
 
-	vector<pair<char, double>> InitProps() {
-		unordered_map<char, int> freq_map = InitFreqMap();
-		vector<pair<char, double>> probs;
+		uint32_t text_length = text_.size();
+		file_out.write(reinterpret_cast<const char*>(&text_length), sizeof(text_length));
 
-		for (const auto& [letter, count] : freq_map) {
-			double prob = count / static_cast<double>(text_.size());
-			probs.push_back({ letter, prob });
+		uint16_t map_size = codes_.size();
+		file_out.write(reinterpret_cast<const char*>(&map_size), sizeof(map_size));
+
+		for (const auto& [letter, code] : codes_) {
+			file_out.put(letter);
+			uint8_t code_length = code.size();
+			file_out.write(reinterpret_cast<const char*>(&code_length), sizeof(code_length));
+
+			uint8_t buffer = 0;
+			int bit_count = 0;
+			for (char bit : code) {
+				if (bit == '1') {
+					buffer |= (1 << (7 - bit_count));
+				}
+				++bit_count;
+				if (bit_count == 8) {
+					file_out.put(buffer);
+					buffer = 0;
+					bit_count = 0;
+				}
+			}
+			if (bit_count != 0) {
+				file_out.put(buffer);
+			}
 		}
 
-		return probs;
+		coded_text_.clear();
+		for (const auto& ch : text_) {
+			coded_text_ += codes_[ch];
+		}
+
+		uint8_t buffer = 0;
+		int bit_count = 0;
+
+		for (const auto& bit : coded_text_) {
+			if (bit == '1') {
+				buffer |= (1 << (7 - bit_count));
+			}
+			++bit_count;
+
+			if (bit_count == 8) {
+				file_out.put(buffer);
+				buffer = 0;
+				bit_count = 0;
+			}
+		}
+		if (bit_count != 0) {
+			file_out.put(buffer);
+		}
+
+		file_out.close();
 	}
+
 };
 
 class FanoDecoder {
 public:
-	FanoDecoder(const string& text, unordered_map<char, string> codes) : text_(text), codes_(codes) {}
-	string Decode() {
+	FanoDecoder(const string& file_name) {
+		ReadEncodedFile(file_name);
+	}
+
+	void Decode(const string& file_name) {
+		ofstream file_out(file_name);
+		file_out << encoded_text_;
+		file_out.close();
+	}
+
+	string GetDecodedText() {
+		return encoded_text_;
+	}
+private:
+	unordered_map<char, string> codes_;
+	string encoded_text_;
+
+	void ReadCodesMap(ifstream& file_in, const int map_size) {
+		for (uint16_t i = 0; i < map_size; ++i) {
+			char symbol;
+			file_in.get(symbol);
+
+			uint8_t code_length = 0;
+			file_in.read(reinterpret_cast<char*>(&code_length), sizeof(code_length));
+
+			string code;
+			uint8_t buffer = 0;
+			int bit_count = 0;
+			for (int j = 0; j < code_length; ++j) {
+				if (bit_count == 0) {
+					file_in.get(reinterpret_cast<char&>(buffer));
+					bit_count = 8;
+				}
+
+				code += (buffer & (1 << (7 - (8 - bit_count)))) ? '1' : '0';
+				--bit_count;
+			}
+
+			codes_[symbol] = code;
+		}
+	}
+
+	unordered_map<string, char> ReverseCodes() {
 		unordered_map<string, char> reverse_codes;
 		for (const auto& [symbol, code] : codes_) {
 			reverse_codes[code] = symbol;
 		}
+		return reverse_codes;
+	}
+
+	void ReadEncodedFile(const string& file_name) {
+		ifstream file_in(file_name, ios::binary);
+		
+		uint32_t text_length = 0;
+		file_in.read(reinterpret_cast<char*>(&text_length), sizeof(text_length));
+
+		uint16_t map_size = codes_.size();
+		file_in.read(reinterpret_cast<char*>(&map_size), sizeof(map_size));
+
+		ReadCodesMap(file_in, map_size);
+
+		unordered_map<string, char> reverse_codes = ReverseCodes();
 
 		string decoded_text;
 		string current_code;
-		for (const char& bit : text_) {
-			current_code += bit;
-			if (reverse_codes.find(current_code) != reverse_codes.end()) {
-				decoded_text += reverse_codes[current_code];
-				current_code.clear();
+		uint8_t buffer = 0;
+
+		int bits_written = 0;
+
+		while (file_in.get(reinterpret_cast<char&>(buffer))) {
+			if (decoded_text.size() == text_length) break;
+			for (int i = 7; i >= 0; --i) {
+				if (decoded_text.size() == text_length) break;
+				char bit = (buffer & (1 << i)) ? '1' : '0';
+				current_code += bit;
+
+				if (reverse_codes.find(current_code) != reverse_codes.end()) {
+					decoded_text += reverse_codes[current_code];
+					current_code.clear();
+				}
+
+				bits_written++;
 			}
 		}
-
-		return decoded_text;
+		encoded_text_ = decoded_text;
+		file_in.close();
 	}
-private:
-	string text_;
-	unordered_map<char, string> codes_;
 };
-
-string ReadFile(const string& file_name) {
-	ifstream file(file_name);
-	string input_text;
-	while (!file.eof()) {
-		string s;
-		file >> s;
-		input_text += s + ' ';
-	}
-	file.close();
-	return input_text.substr(0, input_text.size() - 1);
-}
 
 //main.exe -c -u <num>
 //main.exe -c -l <num>
@@ -223,19 +315,19 @@ int InitComands(Commands& code_decode, Commands& log, int argc, char* argv[]) {
 	}
 }
 
-void LogFile(const string& file_to_log, FanoCoder coder) {
+void LogCoderFile(const string& file_name, FanoCoder coder) {
 	auto c_start = high_resolution_clock::now();
-	//coder.Encode("coder-files/coded/" + file_to_log);
+	coder.Encode("coder-files/coded/code-" + file_name + ".txt");
 	auto c_stop = high_resolution_clock::now();
 	auto c_duration = duration_cast<milliseconds>(c_stop - c_start);
-	
-	ofstream f_out("logs/log-" + file_to_log);
-	f_out << "Время кодирования " + file_to_log + ": " << c_duration.count() << " миллисекунд" << endl;
+
+	ofstream f_out("coder-files/logs/log-" + file_name + ".txt");
+	f_out << "Время кодирования " + file_name + ": " << c_duration.count() << " миллисекунд" << endl;
 
 	string encoded_text = coder.GetEncodedText();
 	unordered_map<char, string> code_map = coder.GetCodes();
-	FanoDecoder decoder(encoded_text, code_map);
-	string decoded_text = decoder.Decode();
+	FanoDecoder decoder("coder-files/coded/code-" + file_name + ".txt");
+	string decoded_text = decoder.GetDecodedText();
 
 	if (coder.GetText() == decoded_text) f_out << "Декодирование успешно: тексты совпадают." << endl;
 	else f_out << "Ошибка декодирования: тексты не совпадают!" << endl;
@@ -250,37 +342,30 @@ void LogFile(const string& file_to_log, FanoCoder coder) {
 	double hentropy = coder.CalculateHentropy();
 	f_out << "Энтропия: " << hentropy << " бит на символ" << endl;
 
-	double total_cost = hentropy * coder.GetText().size();
-	f_out << "Общая стоимость кодирования: " << total_cost << " бит" << endl << endl;
-
 	f_out.close();
 }
 
-void Code(const string& file_name, Commands log) {
-	FanoCoder coder(ReadFile("coder-files/original/text-" + file_name + ".txt"));
-	coder.Encode("coder-files/coded/code-" + file_name + ".txt", "coder-files/code-maps/code-map-" + file_name + ".txt");
-	if (log == LOG) {
-		LogFile("coder-files/logs/log-" + file_name + ".txt", coder);
-	}
+void LogDecoderFile(const string& file_name, FanoDecoder decoder) {
+	auto c_start = high_resolution_clock::now();
+	decoder.Decode("coder-files/coded/code-" + file_name + ".txt");
+	auto c_stop = high_resolution_clock::now();
+	auto c_duration = duration_cast<milliseconds>(c_stop - c_start);
+
+	ofstream f_out("coder-files/logs/log-" + file_name + ".txt");
+	f_out << "Время декодирования " + file_name + ": " << c_duration.count() << " миллисекунд" << endl;
+	f_out.close();
 }
 
-unordered_map<char, string> ReadCodes(const string& file_name) {
-	ifstream file(file_name);
-	unordered_map<char, string> code_map;
-	string input_text;
-	while (!file.eof()) {
-		string letter_s;
-		string code;
-		file >> letter_s >> code;
-		char letter_c = letter_s[1] == '\0' ? ' ' : letter_s[1];
-		code_map.insert({ letter_c, code });
-	}
-	file.close();
-	return code_map;
+void Code(const string& file_name, Commands log) {	
+	FanoCoder coder("coder-files/original/text-" + file_name + ".txt");
+	coder.Encode("coder-files/coded/code-" + file_name + ".txt");
+	if (log == LOG) LogCoderFile(file_name, coder);
 }
 
 void Decode(const string& file_name, Commands log) {
-	FanoDecoder coder(ReadFile("coder-files/code/code-" + file_name + ".txt"), ReadCodes("coder-files/code-maps/code-map-" + file_name + ".txt"));
+	FanoDecoder decoder("coder-files/coded/code-" + file_name + ".txt");
+	decoder.Decode("coder-files/original/text-" + file_name + ".txt");
+	if (log == LOG) LogDecoderFile(file_name, decoder);
 }
 
 int main(int argc, char* argv[]) {
@@ -290,16 +375,23 @@ int main(int argc, char* argv[]) {
 	Commands log = UNLOG;
 	if (InitComands(code_decode, log, argc, argv) == 1) return 1;
 
+	string file_name = argv[3];
 	switch (code_decode) {
 	case CODE:
-		Code(argv[3], log);
+		Code(file_name, log);
+		cout << "File coded succesful!" << endl;
+		cout << "Coded file is located at coder-files/coded/code-" + file_name + ".txt" << endl;
 		break;
 	case DECODE:
-		Decode(argv[3], log);
+		Decode(file_name, log);
+		cout << "File decoded succesful!" << endl;
+		cout << "Coded file is located at coder-files/original/text-" + file_name + ".txt" << endl;
 		break;
 	default:
 		break;
 	}
-	cout << "Done!" << endl;
+	if (log == LOG) {
+		cout << "Log file is located at coder-files/logs/log-" + file_name + ".txt" << endl;
+	}
 	return 0;
 }

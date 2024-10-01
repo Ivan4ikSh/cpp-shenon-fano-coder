@@ -15,25 +15,24 @@ class FanoCoder {
 public:
 	FanoCoder(const string& text) : text_(text) {}
 
-	string Encode() {
+	void Encode(const string& output_file_name, const string& code_map_file_name) {
 		vector<pair<char, double>> probs = InitProps();
-		hentropy_ = Hentropy(probs);
 
 		sort(probs.begin(), probs.end(), [](const pair<char, double>& rhs, const pair<char, double>& lhs) {
 			return rhs.second != lhs.second ? rhs.second > lhs.second : rhs.first < lhs.first;
 			});
 
 		Fano(probs, codes_, "");
-		string coded_text;
-		for (const auto& letter : text_) {
-			coded_text += codes_[letter];
-		}
 
-		return coded_text;
+		InitCodeMapFile(code_map_file_name);
+		InitCodedTextFile(output_file_name);		
 	}
 
 	string GetText() {
 		return text_;
+	}
+	string GetEncodedText() {
+		return coded_text_;
 	}
 
 	unordered_map<char, string> GetCodes() {
@@ -46,8 +45,36 @@ public:
 	}
 private:
 	string text_;
+	string coded_text_;
 	unordered_map<char, string> codes_;
-	double hentropy_ = 0.0;
+
+	void InitCodedTextFile(const string& output_file_name) {
+		uint8_t buffer = 0;
+		int bit_count = 0;
+		ofstream file_out(output_file_name);
+		for (const auto& bit : coded_text_) {
+			if (bit == '1') {
+				buffer |= (1 << (7 - bit_count));
+			}
+			++bit_count;
+
+			if (bit_count == 8) {
+				file_out.put(buffer);
+				buffer = 0;
+				bit_count = 0;
+			}
+		}
+		file_out.close();
+	}
+
+	void InitCodeMapFile(const string& code_map_file_name) {
+		string coded_text;
+		ofstream file_codes_out(code_map_file_name);
+		for (const auto& [letter, code] : codes_) {
+			file_codes_out << "'" << letter << "' " << code << endl;
+		}
+		file_codes_out.close();
+	}
 
 	double Hentropy(const vector<pair<char, double>>& probs) {
 		double h = 0;
@@ -159,70 +186,120 @@ string ReadFile(const string& file_name) {
 	return input_text.substr(0, input_text.size() - 1);
 }
 
-void PrintCost(ostream& log, FanoCoder& coder) {
-	string encoded_text = coder.Encode();
-	size_t encoded_length_in_bits = encoded_text.size();
-	size_t original_length_in_bits = coder.GetText().size() * 8;
+//main.exe -c -u <num>
+//main.exe -c -l <num>
+//main.exe -d -u <num>
+//main.exe -d -l <num>
+enum Commands {
+	CODE, DECODE, LOG, UNLOG
+};
 
-	double compression_ratio = static_cast<double>(encoded_length_in_bits) / original_length_in_bits;
-	log << "Длина закодированного сообщения в битах: " << encoded_length_in_bits << endl;
-	log << "Коэффициент сжатия: " << compression_ratio << endl;
+int InitComands(Commands& code_decode, Commands& log, int argc, char* argv[]) {
+	if (argc != 4) {
+		cerr << "Usage: <-c/-d> <-l/-u> <FileName>" << endl;
+		return 1;
+	}
 
-	double hentropy = coder.CalculateHentropy();
-	log << "Энтропия: " << hentropy << " бит на символ" << endl;
+	if (argv[1][0] == '-' && argv[1][1] == 'c') {
+		code_decode = CODE;
+	}
+	else if (argv[1][0] == '-' && argv[1][1] == 'd') {
+		code_decode = DECODE;
+	}
+	else {
+		cerr << "Usage: <-c/-d> <-l/-u> <FileName>" << endl;
+		return 1;
+	}
 
-	double total_cost = hentropy * coder.GetText().size();
-	log << "Общая стоимость кодирования: " << total_cost << " бит" << endl;
+	if (argv[2][0] == '-' && argv[2][1] == 'l') {
+		log = LOG;
+	}
+	else if (argv[2][0] == '-' && argv[2][1] == 'u') {
+		log = UNLOG;
+	}
+	else {
+		cerr << "Usage: <-c/-d> <-l/-u> <FileName>" << endl;
+		return 1;
+	}
 }
 
-void LOG(ostream& log, const string& coder_file_number) {
-	string original_text = ReadFile("text-to-code/text" + coder_file_number + ".txt");
-
-	FanoCoder coder(original_text);
+void LogFile(const string& file_to_log, FanoCoder coder) {
 	auto c_start = high_resolution_clock::now();
-	string encoded_text = coder.Encode();
+	//coder.Encode("coder-files/coded/" + file_to_log);
 	auto c_stop = high_resolution_clock::now();
 	auto c_duration = duration_cast<milliseconds>(c_stop - c_start);
+	
+	ofstream f_out("logs/log-" + file_to_log);
+	f_out << "Время кодирования " + file_to_log + ": " << c_duration.count() << " миллисекунд" << endl;
 
-	ofstream f_out("text-to-decode/text" + coder_file_number + ".txt");
-	f_out << encoded_text;
-	f_out.close();
-	log << "Время кодирования " + coder_file_number + ": " << c_duration.count() << " миллисекунд" << endl;
-
+	string encoded_text = coder.GetEncodedText();
 	unordered_map<char, string> code_map = coder.GetCodes();
 	FanoDecoder decoder(encoded_text, code_map);
 	string decoded_text = decoder.Decode();
 
-	if (original_text == decoded_text) log << "Декодирование успешно: тексты совпадают." << endl;
-	else log << "Ошибка декодирования: тексты не совпадают!" << endl;
+	if (coder.GetText() == decoded_text) f_out << "Декодирование успешно: тексты совпадают." << endl;
+	else f_out << "Ошибка декодирования: тексты не совпадают!" << endl;
 
-	PrintCost(log, coder);
-	log << endl;
-}
+	size_t encoded_length_in_bits = encoded_text.size();
+	size_t original_length_in_bits = coder.GetText().size() * 8;
 
-void TEST(ostream& output, const string& coder_file_number) {
-	FanoCoder coder(ReadFile("text-to-code/text" + coder_file_number + ".txt"));
-	output << "Оригинальный текст: " << coder.GetText() << endl;
-	string encoded_text = coder.Encode();
+	double compression_ratio = static_cast<double>(encoded_length_in_bits) / original_length_in_bits;
+	f_out << "Длина закодированного сообщения в битах: " << encoded_length_in_bits << endl;
+	f_out << "Коэффициент сжатия: " << compression_ratio << endl;
 
-	ofstream f_out("text-to-decode/text" + coder_file_number + ".txt");
-	f_out << encoded_text;
+	double hentropy = coder.CalculateHentropy();
+	f_out << "Энтропия: " << hentropy << " бит на символ" << endl;
+
+	double total_cost = hentropy * coder.GetText().size();
+	f_out << "Общая стоимость кодирования: " << total_cost << " бит" << endl << endl;
+
 	f_out.close();
-	output << "Закодированный текст: " << encoded_text << endl;
-
-	FanoDecoder decoder(encoded_text, coder.GetCodes());
-	string decoded_text = decoder.Decode();
-	output << "Расшифрованный текст: " << decoded_text << endl;
 }
 
-int main() {
-	setlocale(LC_ALL, "rus");
-	TEST(cout, "1");
+void Code(const string& file_name, Commands log) {
+	FanoCoder coder(ReadFile("coder-files/original/text-" + file_name + ".txt"));
+	coder.Encode("coder-files/coded/code-" + file_name + ".txt", "coder-files/code-maps/code-map-" + file_name + ".txt");
+	if (log == LOG) {
+		LogFile("coder-files/logs/log-" + file_name + ".txt", coder);
+	}
+}
 
-	ofstream file_out("log.txt");
-	LOG(file_out, "1");
-	LOG(file_out, "2");
-	LOG(file_out, "3");
-	file_out.close();
+unordered_map<char, string> ReadCodes(const string& file_name) {
+	ifstream file(file_name);
+	unordered_map<char, string> code_map;
+	string input_text;
+	while (!file.eof()) {
+		string letter_s;
+		string code;
+		file >> letter_s >> code;
+		char letter_c = letter_s[1] == '\0' ? ' ' : letter_s[1];
+		code_map.insert({ letter_c, code });
+	}
+	file.close();
+	return code_map;
+}
+
+void Decode(const string& file_name, Commands log) {
+	FanoDecoder coder(ReadFile("coder-files/code/code-" + file_name + ".txt"), ReadCodes("coder-files/code-maps/code-map-" + file_name + ".txt"));
+}
+
+int main(int argc, char* argv[]) {
+	setlocale(LC_ALL, "rus");
+	
+	Commands code_decode = CODE;
+	Commands log = UNLOG;
+	if (InitComands(code_decode, log, argc, argv) == 1) return 1;
+
+	switch (code_decode) {
+	case CODE:
+		Code(argv[3], log);
+		break;
+	case DECODE:
+		Decode(argv[3], log);
+		break;
+	default:
+		break;
+	}
+	cout << "Done!" << endl;
 	return 0;
 }

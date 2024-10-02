@@ -7,6 +7,7 @@
 #include <numeric>
 #include <string>
 #include <unordered_map>
+#include <stack>
 
 using namespace std;
 using namespace std::chrono;
@@ -32,7 +33,7 @@ public:
 			return rhs.second != lhs.second ? rhs.second > lhs.second : rhs.first < lhs.first;
 			});
 
-		Fano(probs, codes_, "");
+		Fano(probs, codes_);
 	}
 
 	void Encode(const string& file_name) {
@@ -75,23 +76,32 @@ private:
 		return probs;
 	}
 
-	void Fano(vector<pair<char, double>>& probs, unordered_map<char, string>& codes, string prefix) {
-		if (probs.size() == 1) {
-			codes[probs[0].first] = prefix;
-			return;
-		}
-		if (probs.size() == 2) {
-			codes[probs[0].first] = prefix + "1";
-			codes[probs[1].first] = prefix + "0";
-			return;
-		}
+	void Fano(vector<pair<char, double>>& probs, unordered_map<char, string>& codes) {
+		stack<pair<vector<pair<char, double>>, string>> s;
+		s.push({ probs, "" });
 
-		size_t split_index = FindSplitIndex(probs);
-		vector<pair<char, double>> left(probs.begin(), probs.begin() + split_index);
-		vector<pair<char, double>> right(probs.begin() + split_index, probs.end());
+		while (!s.empty()) {
+			auto [current_probs, prefix] = s.top();
+			s.pop();
 
-		Fano(left, codes, prefix + "1");
-		Fano(right, codes, prefix + "0");
+			if (current_probs.size() == 1) {
+				codes[current_probs[0].first] = prefix;
+				continue;
+			}
+
+			if (current_probs.size() == 2) {
+				codes[current_probs[0].first] = prefix + "1";
+				codes[current_probs[1].first] = prefix + "0";
+				continue;
+			}
+
+			size_t split_index = FindSplitIndex(current_probs);
+			vector<pair<char, double>> left(current_probs.begin(), current_probs.begin() + split_index);
+			vector<pair<char, double>> right(current_probs.begin() + split_index, current_probs.end());
+
+			s.push({ right, prefix + "0" });
+			s.push({ left, prefix + "1" });
+		}
 	}
 
 	int FindSplitIndex(const vector<pair<char, double>>& probs) {
@@ -129,10 +139,10 @@ private:
 	void WriteEncodedWithCodeMap(const string& file_name) {
 		ofstream file_out(file_name, ios::binary);
 
-		uint32_t text_length = text_.size();
+		uint64_t text_length = text_.size();
 		file_out.write(reinterpret_cast<const char*>(&text_length), sizeof(text_length));
 
-		uint16_t map_size = codes_.size();
+		uint64_t map_size = codes_.size();
 		file_out.write(reinterpret_cast<const char*>(&map_size), sizeof(map_size));
 
 		for (const auto& [letter, code] : codes_) {
@@ -242,14 +252,13 @@ private:
 	void ReadEncodedFile(const string& file_name) {
 		ifstream file_in(file_name, ios::binary);
 		
-		uint32_t text_length = 0;
+		uint64_t text_length = 0;
 		file_in.read(reinterpret_cast<char*>(&text_length), sizeof(text_length));
 
-		uint16_t map_size = codes_.size();
+		uint64_t map_size = 0;
 		file_in.read(reinterpret_cast<char*>(&map_size), sizeof(map_size));
 
 		ReadCodesMap(file_in, map_size);
-
 		unordered_map<string, char> reverse_codes = ReverseCodes();
 
 		string decoded_text;
@@ -315,14 +324,9 @@ int InitComands(Commands& code_decode, Commands& log, int argc, char* argv[]) {
 	}
 }
 
-void LogCoderFile(const string& file_name, FanoCoder coder) {
-	auto c_start = high_resolution_clock::now();
-	coder.Encode("coder-files/coded/code-" + file_name + ".txt");
-	auto c_stop = high_resolution_clock::now();
-	auto c_duration = duration_cast<milliseconds>(c_stop - c_start);
-
+void LogCoderFile(const string& file_name, FanoCoder coder, int duration) {
 	ofstream f_out("coder-files/logs/log-" + file_name + ".txt");
-	f_out << "Время кодирования " + file_name + ": " << c_duration.count() << " миллисекунд" << endl;
+	f_out << "Время кодирования " + file_name + ": " << duration << " миллисекунд" << endl;
 
 	string encoded_text = coder.GetEncodedText();
 	unordered_map<char, string> code_map = coder.GetCodes();
@@ -358,8 +362,12 @@ void LogDecoderFile(const string& file_name, FanoDecoder decoder) {
 
 void Code(const string& file_name, Commands log) {	
 	FanoCoder coder("coder-files/original/text-" + file_name + ".txt");
+	auto c_start = high_resolution_clock::now();
 	coder.Encode("coder-files/coded/code-" + file_name + ".txt");
-	if (log == LOG) LogCoderFile(file_name, coder);
+	auto c_stop = high_resolution_clock::now();
+	auto c_duration = duration_cast<milliseconds>(c_stop - c_start);
+	
+	if (log == LOG) LogCoderFile(file_name, coder, c_duration.count());
 }
 
 void Decode(const string& file_name, Commands log) {
